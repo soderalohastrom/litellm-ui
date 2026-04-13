@@ -51,3 +51,4 @@ build/
 # Logs
 logs/
 *.log
+.omx/

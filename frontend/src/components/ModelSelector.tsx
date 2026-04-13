@@ -1,16 +1,43 @@
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Alert, AlertDescription } from './Alert';
 
-const ModelSelector = ({ onModelChange }) => {
-  const [providers, setProviders] = useState([]);
+type Provider = {
+  name: string;
+  models: ProviderModel[];
+  is_configured: boolean;
+};
+
+type ProviderModel = {
+  id: string;
+  display_name?: string | null;
+  max_output_tokens: number;
+  suggested_max_tokens: number;
+  max_input_tokens?: number | null;
+  source: string;
+};
+
+type ModelSelectorProps = {
+  onModelChange: (selection: {
+    provider: string;
+    model: string;
+    suggestedMaxTokens: number;
+    maxOutputTokens: number;
+  }) => void;
+};
+
+const ModelSelector = ({ onModelChange }: ModelSelectorProps) => {
+  const [providers, setProviders] = useState<Provider[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedProviderInfo = providers.find(provider => provider.name === selectedProvider);
+  const selectedModelInfo = selectedProviderInfo?.models.find(model => model.id === selectedModel);
 
   useEffect(() => {
-    fetchProviders();
+    void fetchProviders();
   }, []);
 
   const fetchProviders = async () => {
@@ -20,16 +47,16 @@ const ModelSelector = ({ onModelChange }) => {
       if (!response.ok) {
         throw new Error('Failed to fetch providers');
       }
-      const data = await response.json();
+      const data: Provider[] = await response.json();
       setProviders(data);
     } catch (err) {
-      setError(err.message);
+      setError(err instanceof Error ? err.message : 'Failed to fetch providers');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleProviderChange = async (providerId) => {
+  const handleProviderChange = async (providerId: string) => {
     setSelectedProvider(providerId);
     setSelectedModel('');
     
@@ -39,30 +66,39 @@ const ModelSelector = ({ onModelChange }) => {
         if (!response.ok) {
           throw new Error('Failed to fetch models');
         }
-        const models = await response.json();
-        const provider = providers.find(p => p.name === providerId);
-        if (provider) {
-          provider.models = models;
-        }
+        const models: ProviderModel[] = await response.json();
+        setProviders(previousProviders =>
+          previousProviders.map(provider =>
+            provider.name === providerId ? { ...provider, models } : provider,
+          ),
+        );
       } catch (err) {
-        setError(err.message);
+        setError(err instanceof Error ? err.message : 'Failed to fetch models');
       }
     }
   };
 
   useEffect(() => {
     if (selectedProvider && selectedModel) {
-      onModelChange({
-        provider: selectedProvider,
-        model: selectedModel
-      });
+      const selectedModelInfo = providers
+        .find(provider => provider.name === selectedProvider)
+        ?.models.find(model => model.id === selectedModel);
+
+      if (selectedModelInfo) {
+        onModelChange({
+          provider: selectedProvider,
+          model: selectedModel,
+          suggestedMaxTokens: selectedModelInfo.suggested_max_tokens,
+          maxOutputTokens: selectedModelInfo.max_output_tokens,
+        });
+      }
     }
   }, [selectedProvider, selectedModel, onModelChange]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center p-4">
-        <Loader2 className="w-6 h-6 animate-spin" />
+      <div className="loading-row">
+        <Loader2 className="icon icon--spin" />
       </div>
     );
   }
@@ -71,19 +107,18 @@ const ModelSelector = ({ onModelChange }) => {
     <div className="space-y-4">
       {error && (
         <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
+          <AlertCircle className="icon icon--small" />
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Provider
-        </label>
+      <div className="field-group">
+        <label htmlFor="provider">Provider</label>
         <select
+          id="provider"
           value={selectedProvider}
-          onChange={(e) => handleProviderChange(e.target.value)}
-          className="w-full p-2 border rounded-md bg-white"
+          onChange={e => void handleProviderChange(e.target.value)}
+          className="select-input"
         >
           <option value="">Select a provider</option>
           {providers.map((provider) => (
@@ -98,32 +133,67 @@ const ModelSelector = ({ onModelChange }) => {
         </select>
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Model
-        </label>
+      <div className="field-group">
+        <label htmlFor="model">Model</label>
         <select
+          id="model"
           value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
-          className="w-full p-2 border rounded-md bg-white"
+          onChange={e => setSelectedModel(e.target.value)}
+          className="select-input"
           disabled={!selectedProvider}
         >
           <option value="">Select a model</option>
           {selectedProvider && 
-            providers
-              .find(p => p.name === selectedProvider)
-              ?.models.map((model) => (
-                <option key={model} value={model}>
-                  {model}
+            selectedProviderInfo?.models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.display_name ?? model.id}
                 </option>
               ))}
         </select>
       </div>
 
+      {selectedModelInfo && (
+        <div className="model-metadata-card">
+          <div className="model-metadata-card__header">
+            <strong>{selectedModelInfo.display_name ?? selectedModelInfo.id}</strong>
+            <span className="metadata-pill">
+              {selectedModelInfo.source.includes('api') ? 'Live' : 'Fallback'}
+            </span>
+          </div>
+          <div className="metadata-grid">
+            <div>
+              <span className="metadata-label">Model ID</span>
+              <span>{selectedModelInfo.id}</span>
+            </div>
+            <div>
+              <span className="metadata-label">Suggested max</span>
+              <span>{selectedModelInfo.suggested_max_tokens.toLocaleString()}</span>
+            </div>
+            <div>
+              <span className="metadata-label">Hard max output</span>
+              <span>{selectedModelInfo.max_output_tokens.toLocaleString()}</span>
+            </div>
+            <div>
+              <span className="metadata-label">Max input</span>
+              <span>
+                {selectedModelInfo.max_input_tokens
+                  ? selectedModelInfo.max_input_tokens.toLocaleString()
+                  : 'Not surfaced'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedProvider && selectedModel && (
-        <div className="flex items-center gap-2 text-sm text-green-600">
-          <CheckCircle2 className="h-4 w-4" />
-          <span>Provider and model selected</span>
+        <div className="status-row">
+          <CheckCircle2 className="icon icon--small" />
+          <span>
+            Provider and model selected
+            {selectedModelInfo
+              ? ` · suggested max ${selectedModelInfo.suggested_max_tokens.toLocaleString()} / hard max ${selectedModelInfo.max_output_tokens.toLocaleString()}`
+              : ''}
+          </span>
         </div>
       )}
     </div>

@@ -1,35 +1,71 @@
-import React, { useState, useEffect } from 'react';
+import { FormEvent, useState } from 'react';
 import { Send, Settings, Loader } from 'lucide-react';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Alert, AlertDescription } from './Alert';
 import ModelSelector from './ModelSelector';
 
+type ChatMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+};
+
+type SettingsState = {
+  provider: string;
+  model: string;
+  temperature: number;
+  maxLength: number;
+  maxOutputTokens: number | null;
+};
+
+type CompletionResponse = {
+  response: string;
+};
+
+const clampMaxTokens = (value: number, hardMax: number | null) => {
+  const safeValue = Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
+  return hardMax ? Math.min(safeValue, hardMax) : safeValue;
+};
+
 const LightLLMInterface = () => {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [settings, setSettings] = useState({
+  const [error, setError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<SettingsState>({
     provider: '',
     model: '',
     temperature: 0.7,
-    maxLength: 1000
+    maxLength: 1000,
+    maxOutputTokens: null,
   });
-  
+
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!input.trim()) return;
+    if (!settings.provider || !settings.model) {
+      setError('Choose a provider and model before sending a message.');
+      return;
+    }
+
+    const clampedMaxTokens = clampMaxTokens(settings.maxLength, settings.maxOutputTokens);
+    if (clampedMaxTokens !== settings.maxLength) {
+      setSettings(prev => ({
+        ...prev,
+        maxLength: clampedMaxTokens,
+      }));
+    }
 
     setLoading(true);
     setError(null);
 
     try {
       // Add user message to chat
-      const newMessage = {
+      const newMessage: ChatMessage = {
         role: 'user',
         content: input,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       };
       setMessages(prev => [...prev, newMessage]);
       setInput('');
@@ -48,167 +84,200 @@ const LightLLMInterface = () => {
             content: msg.content
           })),
           temperature: settings.temperature,
-          max_tokens: settings.maxLength
+          max_tokens: clampedMaxTokens
         }),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to get response from the model');
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.detail ?? 'Failed to get response from the model');
       }
 
-      const data = await response.json();
+      const data: CompletionResponse = await response.json();
       
       // Add assistant response to chat
-      setMessages(prev => [...prev, {
+      const assistantMessage: ChatMessage = {
         role: 'assistant',
         content: data.response,
-        timestamp: new Date().toISOString()
-      }]);
+        timestamp: new Date().toISOString(),
+      };
+      setMessages(prev => [...prev, assistantMessage]);
     } catch (err) {
-      setError('Failed to get response: ' + err.message);
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      setError('Failed to get response: ' + message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex flex-col h-screen max-w-4xl mx-auto p-4">
-      {/* Header */}
-      <div className="flex justify-between items-center mb-4">
-        <h1 className="text-2xl font-bold">LightLLM Chat</h1>
-        <button 
+    <div className="app-shell">
+      <div className="chat-card">
+        <div className="chat-card__header">
+          <div>
+            <p className="eyebrow">Multi-provider chat</p>
+            <h1>LiteLLM Chat</h1>
+            <p className="subtle-text">
+              Send prompts through a single UI and swap providers/models in one place.
+            </p>
+          </div>
+          <button
+            type="button"
           onClick={() => setSettingsOpen(true)}
-          className="p-2 rounded hover:bg-gray-100"
+          className="icon-button"
+          aria-label="Open settings"
         >
-          <Settings className="w-6 h-6" />
+          <Settings className="icon" />
         </button>
-      </div>
+        </div>
 
-      {/* Error Alert */}
-      {error && (
-        <Alert variant="destructive" className="mb-4">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-      {/* Settings Modal */}
-      {settingsOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-          <div className="bg-white p-6 rounded-lg w-96">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold">Settings</h2>
+        {settingsOpen && (
+          <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}>
+            <div className="modal-card" onClick={event => event.stopPropagation()}>
+              <div className="modal-card__header">
+                <div>
+                  <p className="eyebrow">Configuration</p>
+                  <h2>Settings</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(false)}
+                  className="icon-button"
+                  aria-label="Close settings"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <ModelSelector
+                onModelChange={({ provider, model, suggestedMaxTokens, maxOutputTokens }) => {
+                  setSettings(prev => ({
+                    ...prev,
+                    provider,
+                    model,
+                    maxLength: suggestedMaxTokens,
+                    maxOutputTokens,
+                  }));
+                }}
+              />
+
+              <div className="field-group">
+                <label htmlFor="temperature">Temperature</label>
+                <input
+                  id="temperature"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={settings.temperature}
+                  onChange={e =>
+                    setSettings(prev => ({
+                      ...prev,
+                      temperature: parseFloat(e.target.value),
+                    }))
+                  }
+                />
+                <div className="field-helper">{settings.temperature.toFixed(1)}</div>
+              </div>
+
+              <div className="field-group">
+                <label htmlFor="maxLength">Max tokens</label>
+                <input
+                  id="maxLength"
+                  type="number"
+                  min="1"
+                  value={settings.maxLength}
+                  onChange={e =>
+                    setSettings(prev => ({
+                      ...prev,
+                      maxLength: clampMaxTokens(
+                        Number.parseInt(e.target.value, 10) || 1000,
+                        prev.maxOutputTokens,
+                      ),
+                    }))
+                  }
+                />
+                {settings.maxOutputTokens ? (
+                  <div className="field-helper">
+                    Auto-clamped to the model hard max of {settings.maxOutputTokens.toLocaleString()}.
+                  </div>
+                ) : null}
+              </div>
+
               <button
+                type="button"
                 onClick={() => setSettingsOpen(false)}
-                className="p-1 hover:bg-gray-100 rounded"
+                className="primary-button"
               >
-                ✕
+                Save settings
               </button>
             </div>
-            
-            <ModelSelector
-              onModelChange={({ provider, model }) => {
-                setSettings(prev => ({
-                  ...prev,
-                  provider,
-                  model
-                }));
-              }}
-            />
-            
-            <div className="mt-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Temperature
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.1"
-                value={settings.temperature}
-                onChange={(e) => setSettings(prev => ({
-                  ...prev,
-                  temperature: parseFloat(e.target.value)
-                }))}
-                className="w-full"
-              />
-              <div className="text-sm text-gray-500 text-center">
-                {settings.temperature}
-              </div>
-            </div>
-            
-            <div className="mt-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Max Length
-              </label>
-              <input
-                type="number"
-                value={settings.maxLength}
-                onChange={(e) => setSettings(prev => ({
-                  ...prev,
-                  maxLength: parseInt(e.target.value)
-                }))}
-                className="w-full p-2 border rounded"
-              />
-            </div>
-            
-            <button
-              onClick={() => setSettingsOpen(false)}
-              className="mt-6 w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600"
-            >
-              Save Settings
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Chat Messages */}
-      <div className="flex-1 overflow-auto mb-4 space-y-4 p-4 border rounded-lg">
-        {messages.map((message, index) => (
-          <div
-            key={index}
-            className={`flex ${
-              message.role === 'user' ? 'justify-end' : 'justify-start'
-            }`}
-          >
-            <div
-              className={`max-w-3/4 p-3 rounded-lg ${
-                message.role === 'user'
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-gray-100'
-              }`}
-            >
-              {message.content}
-              <div className="text-xs mt-1 opacity-70">
-                {new Date(message.timestamp).toLocaleTimeString()}
-              </div>
-            </div>
-          </div>
-        ))}
-        {loading && (
-          <div className="flex justify-center items-center">
-            <Loader className="w-6 h-6 animate-spin" />
           </div>
         )}
-      </div>
 
-      {/* Input Form */}
-      <form onSubmit={handleSubmit} className="flex gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Type your message..."
-          className="flex-1 p-2 border rounded"
-          disabled={loading}
-        />
-        <button
-          type="submit"
-          disabled={loading || !input.trim()}
-          className="p-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
-        >
-          <Send className="w-6 h-6" />
-        </button>
-      </form>
+        <div className="message-list">
+          {messages.length === 0 && (
+            <div className="empty-state">
+              <p>No messages yet.</p>
+              <span>Open settings, pick a provider/model, then start chatting.</span>
+            </div>
+          )}
+          {messages.map((message, index) => (
+            <div
+              key={`${message.timestamp}-${index}`}
+              className={`message-row message-row--${message.role}`}
+            >
+              <div className={`message-bubble message-bubble--${message.role}`}>
+                <div>{message.content}</div>
+                <div className="message-meta">
+                  {new Date(message.timestamp).toLocaleTimeString()}
+                </div>
+              </div>
+            </div>
+          ))}
+          {loading && (
+            <div className="loading-row">
+              <Loader className="icon icon--spin" />
+            </div>
+          )}
+        </div>
+
+        <form onSubmit={handleSubmit} className="composer">
+          <input
+            type="text"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder="Type your message..."
+            className="composer__input"
+            disabled={loading}
+          />
+          <button
+            type="submit"
+            disabled={loading || !input.trim()}
+            className="primary-button composer__submit"
+          >
+            <Send className="icon" />
+          </button>
+        </form>
+
+        <div className="footer-note">
+          <span>
+            Active target:{' '}
+            {settings.provider && settings.model
+              ? `${settings.provider} / ${settings.model}`
+              : 'not configured'}
+          </span>
+          {settings.maxOutputTokens ? (
+            <span>{` · suggested ${settings.maxLength.toLocaleString()} / hard max ${settings.maxOutputTokens.toLocaleString()} tokens`}</span>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 };
