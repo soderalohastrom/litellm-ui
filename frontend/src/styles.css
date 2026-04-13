@@ -80,6 +80,10 @@ h2 {
   color: #9fb0ce;
 }
 
+.field-helper--notice {
+  color: #f8d66d;
+}
+
 .icon-button,
 .primary-button {
   border: 0;

@@ -40,6 +40,7 @@ const LightLLMInterface = () => {
   });
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [maxTokensClampNotice, setMaxTokensClampNotice] = useState<string | null>(null);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -55,6 +56,11 @@ const LightLLMInterface = () => {
         ...prev,
         maxLength: clampedMaxTokens,
       }));
+      setMaxTokensClampNotice(
+        `Max tokens was clamped to the selected model hard max of ${clampedMaxTokens.toLocaleString()}.`,
+      );
+    } else {
+      setMaxTokensClampNotice(null);
     }
 
     setLoading(true);
@@ -164,6 +170,7 @@ const LightLLMInterface = () => {
                     maxLength: suggestedMaxTokens,
                     maxOutputTokens,
                   }));
+                  setMaxTokensClampNotice(null);
                 }}
               />
 
@@ -193,20 +200,29 @@ const LightLLMInterface = () => {
                   type="number"
                   min="1"
                   value={settings.maxLength}
-                  onChange={e =>
+                  onChange={e => {
+                    const parsedValue = Number.parseInt(e.target.value, 10) || 1000;
+                    const clampedValue = clampMaxTokens(parsedValue, settings.maxOutputTokens);
                     setSettings(prev => ({
                       ...prev,
-                      maxLength: clampMaxTokens(
-                        Number.parseInt(e.target.value, 10) || 1000,
-                        prev.maxOutputTokens,
-                      ),
-                    }))
-                  }
+                      maxLength: clampedValue,
+                    }));
+                    if (settings.maxOutputTokens && clampedValue !== parsedValue) {
+                      setMaxTokensClampNotice(
+                        `Max tokens was clamped to the selected model hard max of ${settings.maxOutputTokens.toLocaleString()}.`,
+                      );
+                    } else {
+                      setMaxTokensClampNotice(null);
+                    }
+                  }}
                 />
                 {settings.maxOutputTokens ? (
                   <div className="field-helper">
                     Auto-clamped to the model hard max of {settings.maxOutputTokens.toLocaleString()}.
                   </div>
+                ) : null}
+                {maxTokensClampNotice ? (
+                  <div className="field-helper field-helper--notice">{maxTokensClampNotice}</div>
                 ) : null}
               </div>
 
